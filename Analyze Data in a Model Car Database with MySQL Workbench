@@ -1,0 +1,140 @@
+Please feel free to provide feedback on any of the contents of this file.
+
+Technical information about where and how the project was completed.
+  All research was performed using SQL.
+  MySQL server was running on a virtual Linux machine.
+  Coursera provided a .sql file to create tables and insert data.
+  The .sql file was opened and run from DBeaver.
+  All research (SQL quries) was performed using queries run from DBeaver.
+
+
+
+Scenario: Mint Classics currently has four warehouses. They are considering closing one of the warehouses while still maintaining timely service to their customers.
+
+Mint Classics could close warehouse South. The products currently stored there could be moved to other larger warehouses. As a single product is currently only stored in a single warehouse, the redustribution of products should not negitively affect shipping times. As part of this, there are also options to reduce the required storage by:
+  Removing items that have never been sold
+  Removing items that do not meet profit margin requirements
+  Reducing the amount of itmes stocked for some products
+
+More information for each of the above can be found below.
+
+
+A series of questions were presented in order to investigate the scenario. Below are the questions, the SQL code and comments about the results. When the results were reasonably small, they were provided here. In some cases, the results were shortened in order to fit. A notation was added when this happened.
+
+Q: How many unique items are available?
+
+SELECT count(DISTINCT productCode) AS numberOfProducts;
+
+Currently, there are 110 different products available.
+
+
+Q: How many items are at each warehouse and what is the storage capacity information?
+
+SELECT whName, whPctCap, whUnits, ROUND((whTotalSpace - whUnits) / whTotalSpace * 100) as whPctFree, whFreeSpace, whTotalSpace
+FROM
+	(SELECT  w.warehouseName AS whName, w.warehousePctCap AS whPctCap, sum(p.quantityInStock) AS whUnits, 
+			round((sum(p.quantityInStock) / w.warehousePctCap) * (100 - w.warehousePctCap)) AS whFreeSpace,
+			round((sum(p.quantityInStock) / w.warehousePctCap) * (100 - w.warehousePctCap)) + sum(p.quantityInStock) AS whTotalSpace
+	FROM warehouses w 
+	LEFT JOIN products p ON w.warehouseCode = p.warehouseCode
+	GROUP BY w.warehouseName, w.warehousePctCap) AS wh;
+	
+whName	whPctCap	whUnits	whPctFree	whFreeSpace	whTotalSpace
+North	72			131,688	28			51,212		182,900
+East	67			219,183	33			107,956		327,139
+West	50			124,880	50			124,880		249,760
+South	75			79,380	25			26,460		105,840
+
+The south warehouse is the smallest. The number of units currently stored there (79,380) could easily be divided up amongst the remaining three warehouses. The cost of moving items is unknown. Additional information would need to be obtained to answer this question. However, it may be possible to sell the current stock and when reordering, have the replacements sent to one of the other warehouses. This option would likely not quickly empty the entire warehouse, but would help to reduce transportation costs for the remaining inventory.
+NOTE: The above counts are estimations based on the assumption that all products have the same dimensions. As it is unlikely that is true, further investigation would be required to ensure all products stored in the South warehouse would fit into the other warehouses.
+
+
+Q: Are there any products that have not sold?
+
+SELECT p.productCode, p.quantityInStock, p.buyPrice * p.quantityInStock AS purchasePrice, w.warehouseName, w.warehousePctCap 
+FROM products p 
+LEFT JOIN orderdetails od ON p.productCode = od.productCode
+LEFT JOIN orders o on od.orderNumber  = o.orderNumber 
+LEFT JOIN warehouses w ON p.warehouseCode = w.warehouseCode 
+WHERE p.productCode NOT IN
+	/* list all productCode that have been ordered and have not been canceled */
+	(SELECT DISTINCT od.productCode 
+	FROM orderdetails od
+	LEFT JOIN orders o ON od.orderNumber = o.orderNumber
+	WHERE o.status != 'Cancelled') /* canceled order do not result in a sale so don't count them. */;
+
+productCode quantityInStock purchasePrice   warehouseName   warehousePctCap
+S18_3233    7733            440858.33       East            67
+
+There is one product that is currently stocked that has never sold. This item could be removed from the list of available products saving warehouse space. This would help support the idea of moving the South warehouse's inventory to other warehouses.
+
+
+Q: Do the amount of sales justify the amount of stock for each product?
+
+SELECT DISTINCT od.productCode, 
+				p.productName, 
+				SUM(od.quantityOrdered) OVER (PARTITION BY od.productCode) AS ordered_count,
+				p.quantityInStock AS inStock,
+				(p.quantityInStock - SUM(od.quantityOrdered) OVER (PARTITION BY od.productCode)) / SUM(od.quantityOrdered) OVER (PARTITION BY od.productCode)+1 as stockOrderRatio,
+				w.warehouseName 
+FROM orderdetails od
+LEFT JOIN products p ON od.productCode = p.productCode
+LEFT JOIN orders o ON od.orderNumber = o.orderNumber
+LEFT JOIN warehouses w on p.warehouseCode = w.warehouseCode 
+WHERE o.orderDate BETWEEN '2003-01-01' AND '2005-12-31' /* data 2003 - 2005. alter for specific years*/
+AND o.status != 'Cancelled'
+order by 6, 5;
+
+There are over 100 results. The first 10 results are provided here as a sample.
+productCode productName                         ordered_count   inStock stockOrderRatio warehouseName
+S12_1099    1968 Ford Mustang                   909             68      0.0748          East
+S12_3891    1969 Ford Falcon                    921             1049    1.1390          East
+S18_4721    1957 Corvette Convertible           1013            1249    1.2330          East
+S24_1046    1970 Chevy Chevelle SS 454          803             1005    1.2516          East
+S24_2887    1952 Citroen-15CV                   873             1452    1.6632          East
+S18_3278    1969 Dodge Super Bee                974             1917    1.9682          East
+S24_2766    1949 Jaguar XK 120                  949             2350    2.4763          East
+S24_2840    1958 Chevy Corvette Limited Edition 983             2542    2.5860          East
+S10_4757    1972 Alfa Romeo GTA                 966             3252    3.3665          East
+S12_1108    2001 Ferrari Enzo                   973             3619    3.7194          East
+
+The lowest ratio is 0.0148 and the highest ratio is 11.0543. A ration of 1 means that the current stock would cover the historical number of sales. Ratios under 1 may need to have additional stock ordered, if it has not already been ordered. Ratios over 1, but close to 1 may indicate an appropriate number of that product are currently in stock. Higher ratios may indicate that sales do not support the current amount of items in the warehouse.
+Note: The amount of time required to order and receive replacement stock for each product is unknown. This would affect the amount of stock for each item as long waits for products would require a larger amount of stock to sustain sales. Additional research would be required for each product to find the correct balance of stock vs. required storage space.
+
+
+Q: Are all of the stocked products profitable?
+
+SELECT p.productCode, p.buyPrice, round(avg(od.priceEach),2) as avg_Sales_Price, 
+    ROUND((avg(od.priceEach) - p.buyPrice) / p.buyPrice * 100,2) AS avg_pct, w.warehouseName,
+    CASE
+        WHEN ((avg(od.priceEach) - p.buyPrice) / p.buyPrice * 100) IS NULL THEN "Never sold"
+        WHEN ((avg(od.priceEach) - p.buyPrice) / p.buyPrice * 100) < 30 THEN "Less than 30pct profit"
+        WHEN ((avg(od.priceEach) - p.buyPrice) / p.buyPrice * 100) between 30 AND 35 THEN "Less than 35pct profit"
+        ELSE ""
+    END AS isProfitable
+FROM products p 
+LEFT JOIN orderdetails od on p.productCode = od.productCode
+LEFT JOIN warehouses w ON p.warehouseCode = w.warehouseCode 
+GROUP BY p.productCode
+ORDER BY 4;
+
+Showing items that are below 35pct profit.
+    buyPrice is the price Mint Classics pays.
+    avg_priceEach is the average sales price that customers pay.
+
+productCode buyPrice    avg_Sales_Price avg_pct warehouseName   isProfitable
+S18_3233    57.01                               East            Never sold
+S18_1889    53.90       68.53           27.14   East            Less than 30pct profit
+S18_4600    84.76       107.98          27.39   South           Less than 30pct profit
+S10_4962    103.42      131.81          27.45   East            Less than 30pct profit
+S24_2360    47.10       61.36           30.27   North           Less than 35pct profit
+S24_3856    98.30       128.26          30.48   East            Less than 35pct profit
+S700_2466   68.80       90.35           31.33   North           Less than 35pct profit
+S32_1374    66.92       88.69           32.53   North           Less than 35pct profit
+S24_1937    22.57       29.93           32.61   West            Less than 35pct profit
+S18_3259    67.56       90.01           33.23   South           Less than 35pct profit
+S700_3167   54.40       73.03           34.24   North           Less than 35pct profit
+S24_2011    82.34       110.92          34.71   South           Less than 35pct profit
+
+S18_3233 is the product that has never sold that was mentioned earlier. A business decision would need to be made to determine if the profit margin for each product supports offering that product or if prices need to be adjusted. If an item is deemed unprofitable, it could be removed from the list of available products, freeing up warehouse space.
+
